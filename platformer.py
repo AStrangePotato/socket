@@ -8,27 +8,29 @@ from pygame.locals import *
 
 pygame.init()
 pygame.display.set_caption('moba deez nuts') # set the window name
-
 WINDOW_SIZE = (800,450) # set up window size
-
 screen = pygame.display.set_mode(WINDOW_SIZE,0,32) # initiate screen
-
 display = pygame.Surface((400, 225))
 clock = pygame.time.Clock()
 
 
+
 #INITIATE SOCKETS#
-HOST = "192.168.1.66"  # The server's hostname or IP address
-if socket.gethostname() != "DESKTOP-STEVEN" and socket.gethostname() != "Daniel-ThinkX1":
-    HOST = "108.180.180.157"
-PORT = 12000  # The port used by the server
+global s
+def initiateSockets():
+    global s
+    HOST = "192.168.1.66"  # The server's hostname or IP address
+    if socket.gethostname() != "DESKTOP-STEVEN" and socket.gethostname() != "Daniel-ThinkX1":
+        HOST = "108.180.180.157"
+    PORT = 12000  # The port used by the server
 
 
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect((HOST, PORT))
-print("Connected")
-time.sleep(0.1)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((HOST, PORT))
+    print("Connected")
+    time.sleep(0.1)
 
+initiateSockets()
 player = s.recv(1024).decode()
 if player == "p1":
     playerNum = 1
@@ -63,7 +65,10 @@ debug = True
 player_rect = pygame.Rect(50, 10, player_image.get_width() , player_image.get_height() + 2)
 weapon_rect = pygame.Rect(0, 0, 18, 30)
 
+client_opponent_rect = pygame.Rect(0, 0, player_image.get_width() , player_image.get_height() + 2)
+global player_health
 player_health = 9
+
 
 global opponent_state
 s.send("get".encode())
@@ -78,6 +83,10 @@ player_frame = 0
 
 opponent_action = "idle"
 opponent_frame = 0
+
+
+
+
 
 global animation_frames
 animation_frames = {}
@@ -129,7 +138,6 @@ def strToBool(v):
     if v == "False":
         return False
 
-
 def collision_test(rect, tiles):
     hit_list = []
     for tile in tiles:
@@ -176,12 +184,14 @@ def lerp(start, end, splitNum):
 
 def multi():
     global opponent_state
+    global player_health
     while True:
 
         s.send("get ".encode())
 
         data = pickle.loads(s.recv(1024))
         opponent_state = data[playerNum]
+        player_health = data[abs(playerNum-1)][0]
 
 
 multiThread = threading.Thread(target=multi)
@@ -192,9 +202,15 @@ lerpCounter = 0
 
 trigger1 = False #if idle state
 trigger2 = False #if attack state
+damage_trigger = False #when the attack is actually swinging
 #combine for new attack command
 fresh_attack = False
 
+
+
+#############
+##MAIN LOOP##
+#############
 
 while True: # game loop
     display.blit(background, (0, 0))
@@ -276,7 +292,6 @@ while True: # game loop
     if player_frame >= len(animation_database[player_action]):
         player_frame = 0
 
-
     if opponent_frame >= len(animation_database["attack"]):
         opponent_frame = 0
         opponent_action = "idle"
@@ -290,9 +305,13 @@ while True: # game loop
 
 
     #damage
-    if fresh_attack and player_frame >= 30:
+    if fresh_attack and player_frame > 28: #hit period frame 30+
         fresh_attack = False
-        print("hit here")
+        damage_trigger = True
+
+    if player_frame < 28 or player_frame > 36:
+        damage_trigger = False
+
 
     player_img_id = animation_database[player_action][player_frame] 
     player_image = animation_frames[player_img_id]
@@ -312,7 +331,6 @@ while True: # game loop
         weapon_rect.x = player_rect.x - 10
         weapon_rect.y = player_rect.y + 4
 
-
     elif facing_right == True:
         display.blit(pygame.transform.flip(player_image, not facing_right, False), (player_rect.x - 8, player_rect.y))
         weapon_rect.x = player_rect.x + 20
@@ -330,7 +348,6 @@ while True: # game loop
         except Exception as e:
             print(e)
 
-
     elif oppFace == True:
         try:
             display.blit(pygame.transform.flip(opponent_image, not oppFace, False), (lerpX_points[lerpCounter] - 8, lerpY_points[lerpCounter]))
@@ -339,15 +356,36 @@ while True: # game loop
             print(e)
 
         
-    #HITBOX display
+    #healthand hitboxes
+    #! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! !
     try:
         display.blit(pygame.image.load("health/health_" + str(9-player_health) + ".png"), (player_rect.x - 1, player_rect.y - 10))
-    except:
-        display.blit(pygame.image.load("health/health_0.png"), (player_rect.x - 1, player_rect.y - 10))
+    except Exception as e:
+        pass
+    try: 
+        display.blit(pygame.image.load("health/health_" + str(9-opponent_state[0]) + ".png"), (lerpX_points[lerpCounter] - 1, lerpY_points[lerpCounter] - 10))
+    except Exception as e:
+        pass
     
+    
+    
+    if pygame.Rect.colliderect(weapon_rect, client_opponent_rect):
+        overlapColor = (255, 165, 0)
+        if damage_trigger:
+            print("opponent hit")
+            dealt_damage = 2
+            s.send(f"hit {dealt_damage} ".encode())
+
+        damage_trigger = False
+    else:
+        overlapColor = (0,0,255)
+
+
     if debug:
+        client_opponent_rect.x, client_opponent_rect.y = opponent_state[1][0], opponent_state[1][1]
         pygame.draw.rect(display, (0, 255, 0), player_rect, 1)
         pygame.draw.rect(display, (255, 0, 0), weapon_rect, 1)
+        pygame.draw.rect(display, overlapColor, client_opponent_rect, 1)
         
     if lerpCounter < 4:
         lerpCounter += 1
@@ -356,7 +394,7 @@ while True: # game loop
     #socket stuff
     s.send(f"move {player_rect.x} {player_rect.y} {facing_right} ".encode())
     s.send(f"updateState {player_action} ".encode())
-
+    
     for event in pygame.event.get(): # event loop
         if event.type == QUIT: # check for window quit
             pygame.quit() # stop pygame
@@ -374,8 +412,12 @@ while True: # game loop
                     player_action = "attack"
                     fresh_attack = True
                     player_frame = 0
-            if event.key == K_b:
-                player_health -= 1
+            if event.key == K_MINUS:
+                if player_health > 1:
+                    player_health -= 1
+            if event.key == K_EQUALS:
+                if player_health < 9:
+                    player_health += 1
         if event.type == KEYUP:
             if event.key == K_d:
                 moving_right = False
